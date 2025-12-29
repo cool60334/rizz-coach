@@ -1,269 +1,656 @@
-import React, { useState } from 'react';
-import { FileUpload } from './components/FileUpload';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { AnalysisResult } from './components/AnalysisResult';
 import { analyzeProfileImage, analyzeChatImage } from './services/gemini';
-import { ProfileAnalysis, ChatAdvice } from './types';
-import { Sparkles, Loader2, UserCircle2, MessageSquare, Lightbulb, ChevronRight, Check } from 'lucide-react';
+import { Message, Session, ChatAdvice } from './types';
+import { 
+  Sparkles, 
+  Send, 
+  Image as ImageIcon, 
+  Plus, 
+  MessageSquare, 
+  Menu, 
+  X, 
+  Loader2,
+  Trash2,
+  User,
+  Pencil,
+  Check,
+  Info,
+  GripVertical
+} from 'lucide-react';
 
-// Steps definition
-const STEPS = [
-  { id: 1, title: "個人資料", icon: UserCircle2 },
-  { id: 2, title: "對話內容", icon: MessageSquare },
-  { id: 3, title: "教練建議", icon: Lightbulb },
-];
+// Simple UUID generator fallback
+const generateId = () => Math.random().toString(36).substring(2, 9);
 
 export default function App() {
-  const [activeStep, setActiveStep] = useState(1);
-  const [completedSteps, setCompletedSteps] = useState<number[]>([]);
+  const [sessions, setSessions] = useState<Session[]>([]);
+  const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [profileOpen, setProfileOpen] = useState(false); // Right sidebar/Drawer for profile
   
-  const [profileImage, setProfileImage] = useState<string | null>(null);
-  const [chatImage, setChatImage] = useState<string | null>(null);
-  
-  const [profileData, setProfileData] = useState<ProfileAnalysis | null>(null);
-  const [chatAdvice, setChatAdvice] = useState<ChatAdvice | null>(null);
-  
-  const [isAnalyzing, setIsAnalyzing] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  // Resizable Sidebar State
+  const [sidebarWidth, setSidebarWidth] = useState(320);
+  const [isResizing, setIsResizing] = useState(false);
+  const sidebarRef = useRef<HTMLElement>(null);
 
-  const handleStepClick = (stepId: number) => {
-    // Only allow navigation to completed steps or the next immediate step
-    if (completedSteps.includes(stepId) || stepId === activeStep || (stepId === activeStep + 1 && completedSteps.includes(activeStep))) {
-      setActiveStep(stepId);
-    } else if (stepId < activeStep) {
-        setActiveStep(stepId);
+  // Sidebar Editing State
+  const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
+  const [editingTitle, setEditingTitle] = useState('');
+  
+  // Input State
+  const [inputText, setInputText] = useState('');
+  const [inputImage, setInputImage] = useState<string | null>(null);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  const currentSession = sessions.find(s => s.id === currentSessionId);
+
+  // Initialize new session on load if none
+  useEffect(() => {
+    if (sessions.length === 0) {
+      createNewSession();
+    }
+  }, []);
+
+  useEffect(() => {
+    scrollToBottom();
+  }, [currentSession?.messages, isProcessing]);
+
+  // Auto-resize textarea
+  useEffect(() => {
+    if (textareaRef.current) {
+      textareaRef.current.style.height = 'auto';
+      textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 200)}px`;
+    }
+  }, [inputText]);
+
+  // Resizing Logic
+  const startResizing = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    setIsResizing(true);
+  }, []);
+
+  const stopResizing = useCallback(() => {
+    setIsResizing(false);
+  }, []);
+
+  const resize = useCallback((e: MouseEvent) => {
+    if (isResizing) {
+      const newWidth = window.innerWidth - e.clientX;
+      if (newWidth > 250 && newWidth < 800) {
+        setSidebarWidth(newWidth);
+      }
+    }
+  }, [isResizing]);
+
+  useEffect(() => {
+    window.addEventListener('mousemove', resize);
+    window.addEventListener('mouseup', stopResizing);
+    return () => {
+      window.removeEventListener('mousemove', resize);
+      window.removeEventListener('mouseup', stopResizing);
+    };
+  }, [resize, stopResizing]);
+
+
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  };
+
+  const createNewSession = () => {
+    const newSession: Session = {
+      id: generateId(),
+      title: '新對話',
+      messages: [],
+      lastUpdated: Date.now(),
+    };
+    setSessions(prev => [newSession, ...prev]);
+    setCurrentSessionId(newSession.id);
+    setProfileOpen(false);
+    if (window.innerWidth < 768) setSidebarOpen(false);
+  };
+
+  const deleteSession = (e: React.MouseEvent, id: string) => {
+    e.stopPropagation();
+    setSessions(prev => prev.filter(s => s.id !== id));
+    if (currentSessionId === id) {
+      const remaining = sessions.filter(s => s.id !== id);
+      if (remaining.length > 0) {
+        setCurrentSessionId(remaining[0].id);
+      } else {
+        createNewSession();
+      }
     }
   };
 
-  const markStepComplete = (stepId: number) => {
-    if (!completedSteps.includes(stepId)) {
-      setCompletedSteps(prev => [...prev, stepId]);
+  // Sidebar Title Editing
+  const startEditing = (e: React.MouseEvent, session: Session) => {
+    e.stopPropagation();
+    setEditingSessionId(session.id);
+    setEditingTitle(session.title);
+  };
+
+  const saveTitle = (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (editingSessionId && editingTitle.trim()) {
+      setSessions(prev => prev.map(s => 
+        s.id === editingSessionId ? { ...s, title: editingTitle.trim() } : s
+      ));
+    }
+    setEditingSessionId(null);
+  };
+
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        const result = reader.result as string;
+        setInputImage(result);
+      };
+      reader.readAsDataURL(file);
     }
   };
 
-  const handleProfileUpload = (base64: string) => {
-    setProfileImage(base64);
-    // When re-uploading, clear downstream data but don't strictly reset view unless necessary
-    setProfileData(null);
-    setChatAdvice(null);
-    setCompletedSteps([]); // Reset progress
-    setError(null);
-  };
+  const handleSendMessage = async () => {
+    if ((!inputText.trim() && !inputImage) || isProcessing || !currentSessionId) return;
 
-  const handleChatUpload = (base64: string) => {
-    setChatImage(base64);
-    setChatAdvice(null);
-    // Remove step 2 and 3 from completed if re-uploading chat
-    setCompletedSteps(prev => prev.filter(s => s === 1));
-  };
+    const base64Image = inputImage ? inputImage.split(',')[1] : undefined;
+    const userMsgId = generateId();
+    
+    // 1. Add User Message
+    const userMessage: Message = {
+      id: userMsgId,
+      role: 'user',
+      type: 'text',
+      content: inputText,
+      image: inputImage || undefined,
+      timestamp: Date.now()
+    };
 
-  const processProfile = async () => {
-    if (!profileImage) return;
-    
-    setIsAnalyzing(true);
-    setError(null);
-    
+    setSessions(prev => prev.map(s => {
+      if (s.id === currentSessionId) {
+        return {
+          ...s,
+          messages: [...s.messages, userMessage],
+          lastUpdated: Date.now()
+        };
+      }
+      return s;
+    }));
+
+    // Clear input immediately
+    setInputText('');
+    setInputImage(null);
+    if (textareaRef.current) textareaRef.current.style.height = 'auto';
+    setIsProcessing(true);
+
     try {
-      const data = await analyzeProfileImage(profileImage);
-      setProfileData(data);
-      markStepComplete(1);
-      setActiveStep(2); // Auto advance
-    } catch (err: any) {
-      console.error(err);
-      setError("無法分析個人檔案，請確認圖片清晰度。");
+      const activeSession = sessions.find(s => s.id === currentSessionId);
+      const newMessages: Message[] = [];
+
+      // CORE LOGIC: Profile vs Chat
+      if (!activeSession?.activeProfile) {
+        if (!base64Image) {
+           throw new Error("請先上傳一張對方的個人檔案截圖 (Tinder/IG)，讓我建立她的性格側寫。");
+        }
+        
+        const profileData = await analyzeProfileImage(base64Image, inputText);
+        
+        // Save profile AND update session title with her name
+        const detectedName = profileData.basicInfo.name || '新對象';
+        
+        setSessions(prev => prev.map(s => {
+          if (s.id === currentSessionId) {
+            return { 
+              ...s, 
+              activeProfile: profileData,
+              title: detectedName
+            };
+          }
+          return s;
+        }));
+
+        // Automatically open the profile view
+        setProfileOpen(true);
+
+        // Message 1: The Profile Card
+        newMessages.push({
+          id: generateId(),
+          role: 'model',
+          type: 'profile_analysis',
+          profileData: profileData,
+          timestamp: Date.now()
+        });
+
+        // Message 2: Opening Lines (Separate Bubble)
+        if (profileData.openingLines && profileData.openingLines.length > 0) {
+          const openingLineAdvice: ChatAdvice = {
+            situationAnalysis: `已成功建立 ${detectedName} 的檔案。根據她的興趣與性格，以下是幾個適合的開場白建議：`,
+            suggestions: profileData.openingLines,
+            coachTip: "第一句話很重要！觀察照片細節，選擇一個最自然的切入點。不要只說「嗨」，試著引發她的好奇心。"
+          };
+
+          newMessages.push({
+            id: generateId(),
+            role: 'model',
+            type: 'chat_advice',
+            chatAdvice: openingLineAdvice,
+            timestamp: Date.now() + 100 // Slight offset
+          });
+        }
+
+      } else {
+        const chatAdvice = await analyzeChatImage(base64Image || null, activeSession.activeProfile, inputText);
+        
+        newMessages.push({
+          id: generateId(),
+          role: 'model',
+          type: 'chat_advice',
+          chatAdvice: chatAdvice,
+          timestamp: Date.now()
+        });
+      }
+
+      setSessions(prev => prev.map(s => {
+        if (s.id === currentSessionId) {
+          return {
+            ...s,
+            messages: [...s.messages, ...newMessages],
+            lastUpdated: Date.now()
+          };
+        }
+        return s;
+      }));
+
+    } catch (error: any) {
+      console.error(error);
+      const errorMsg: Message = {
+        id: generateId(),
+        role: 'model',
+        type: 'error',
+        content: error.message || "抱歉，分析過程中發生錯誤，請稍後再試。",
+        timestamp: Date.now()
+      };
+      setSessions(prev => prev.map(s => s.id === currentSessionId ? { ...s, messages: [...s.messages, errorMsg] } : s));
     } finally {
-      setIsAnalyzing(false);
+      setIsProcessing(false);
     }
   };
 
-  const processChat = async () => {
-    if (!chatImage || !profileData) return;
-    
-    setIsAnalyzing(true);
-    setError(null);
-    
-    try {
-      const advice = await analyzeChatImage(chatImage, profileData);
-      setChatAdvice(advice);
-      markStepComplete(2);
-      setActiveStep(3); // Auto advance
-    } catch (err: any) {
-      console.error(err);
-      setError("無法分析對話內容，請確認圖片清晰度。");
-    } finally {
-      setIsAnalyzing(false);
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      handleSendMessage();
     }
   };
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900 font-sans selection:bg-indigo-100 selection:text-indigo-900">
+    <div className="flex h-screen bg-slate-50 text-slate-900 font-sans overflow-hidden">
       
-      {/* Top Navigation Bar */}
-      <div className="bg-white border-b border-gray-200 sticky top-0 z-50">
-        <div className="max-w-4xl mx-auto px-4 h-16 flex items-center justify-between">
-          <div className="flex items-center space-x-2">
-            <div className="bg-gradient-to-tr from-indigo-500 to-purple-600 p-1.5 rounded-lg">
-              <Sparkles className="w-5 h-5 text-white" />
-            </div>
-            <h1 className="text-xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-indigo-600 to-purple-600 hidden md:block">
-              RizzCoach AI
-            </h1>
-          </div>
-          
-          {/* Stepper */}
-          <div className="flex items-center space-x-2 md:space-x-4">
-            {STEPS.map((step, index) => {
-              const isActive = activeStep === step.id;
-              const isCompleted = completedSteps.includes(step.id);
-              const isClickable = isCompleted || step.id <= Math.max(...completedSteps, 1) + 1;
-              const Icon = step.icon;
+      {/* Sidebar Overlay for Mobile */}
+      {sidebarOpen && (
+        <div 
+          className="fixed inset-0 bg-black/50 z-20 md:hidden"
+          onClick={() => setSidebarOpen(false)}
+        />
+      )}
 
-              return (
-                <div key={step.id} className="flex items-center">
-                  <button
-                    onClick={() => handleStepClick(step.id)}
-                    disabled={!isClickable && !isActive}
-                    className={`flex items-center space-x-2 px-3 py-1.5 rounded-full transition-all text-sm font-medium
-                      ${isActive 
-                        ? 'bg-indigo-600 text-white shadow-md shadow-indigo-200' 
-                        : isClickable
-                          ? isCompleted 
-                            ? 'bg-green-100 text-green-700 hover:bg-green-200'
-                            : 'text-gray-600 hover:text-indigo-600 hover:bg-gray-100'
-                          : 'text-gray-400 cursor-not-allowed'
-                      }
-                    `}
-                  >
-                    {isCompleted && !isActive ? <Check className="w-4 h-4" /> : <span className="w-4 h-4 flex items-center justify-center text-xs">{step.id}</span>}
-                    <span className={`${isActive ? 'block' : 'hidden md:block'}`}>{step.title}</span>
-                  </button>
-                  {index < STEPS.length - 1 && (
-                    <div className="w-4 h-0.5 bg-gray-200 mx-1 md:mx-2 hidden md:block" />
-                  )}
-                </div>
-              );
-            })}
-          </div>
+      {/* LEFT SIDEBAR (Session History) */}
+      <aside 
+        className={`
+          fixed md:relative z-30 flex-shrink-0 w-72 h-full bg-gray-50 border-r border-gray-200 transition-transform duration-300 ease-in-out flex flex-col
+          ${sidebarOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0 md:w-0 md:border-none overflow-hidden'}
+        `}
+      >
+        <div className="p-4">
+          <button 
+            onClick={() => {
+              createNewSession();
+              if (window.innerWidth < 768) setSidebarOpen(false);
+            }}
+            className="w-full flex items-center justify-start space-x-3 px-4 py-3 bg-gray-200 hover:bg-gray-300 rounded-full text-sm font-medium text-gray-700 transition-colors"
+          >
+            <Plus className="w-5 h-5" />
+            <span>開啟新對話</span>
+          </button>
         </div>
-      </div>
 
-      <main className="max-w-3xl mx-auto p-4 md:p-8 space-y-8">
-        
-        {/* Error Message */}
-        {error && (
-          <div className="bg-red-50 border-l-4 border-red-500 text-red-700 p-4 rounded-r shadow-sm animate-pulse">
-            <p className="font-bold">Error</p>
-            <p className="text-sm">{error}</p>
-          </div>
-        )}
-
-        {/* Views */}
-        <div className="transition-all duration-300">
-          
-          {/* STEP 1: Profile */}
-          {activeStep === 1 && (
-            <div className="space-y-6 animate-fadeIn">
-              <div className="bg-white rounded-3xl p-6 md:p-8 border border-gray-100 shadow-xl shadow-gray-200/50">
-                <h2 className="text-2xl font-bold text-gray-900 mb-2">上傳個人檔案</h2>
-                <p className="text-gray-500 mb-6">請上傳對方的個人簡介截圖，AI 將分析她的興趣與性格。</p>
-                
-                <FileUpload 
-                  label="點擊或拖放個人簡介" 
-                  onFileSelect={handleProfileUpload}
-                />
-                
-                {profileImage && (
-                  <button 
-                    onClick={processProfile}
-                    disabled={isAnalyzing}
-                    className="w-full mt-6 bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-3.5 rounded-xl transition-all shadow-lg shadow-indigo-200 flex items-center justify-center disabled:opacity-70 disabled:cursor-not-allowed"
-                  >
-                    {isAnalyzing ? (
-                      <><Loader2 className="w-5 h-5 mr-2 animate-spin" /> 分析中...</>
-                    ) : (
-                      <>開始分析檔案 <ChevronRight className="w-5 h-5 ml-2" /></>
-                    )}
+        <div className="flex-1 overflow-y-auto px-2 space-y-1">
+          <div className="px-4 py-2 text-xs font-semibold text-gray-500">最近的對話</div>
+          {sessions.map(session => (
+            <div 
+              key={session.id}
+              onClick={() => {
+                setCurrentSessionId(session.id);
+                setProfileOpen(false);
+                if (window.innerWidth < 768) setSidebarOpen(false);
+              }}
+              className={`group flex items-center justify-between px-4 py-2 rounded-full cursor-pointer transition-colors text-sm relative
+                ${currentSessionId === session.id ? 'bg-indigo-100 text-indigo-900' : 'hover:bg-gray-100 text-gray-700'}
+              `}
+            >
+              {editingSessionId === session.id ? (
+                <form onSubmit={saveTitle} className="flex-1 flex items-center" onClick={e => e.stopPropagation()}>
+                  <input
+                    autoFocus
+                    type="text"
+                    value={editingTitle}
+                    onChange={(e) => setEditingTitle(e.target.value)}
+                    onBlur={() => saveTitle()}
+                    className="w-full bg-white border border-indigo-300 rounded px-2 py-1 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                  />
+                  <button type="submit" className="ml-2 text-green-600 hover:text-green-700">
+                    <Check className="w-4 h-4" />
                   </button>
-                )}
-              </div>
-
-              {/* Show result preview if data exists */}
-              {profileData && (
-                <div className="opacity-70 hover:opacity-100 transition-opacity">
-                   <div className="text-center text-sm text-gray-400 mb-2">— 分析結果預覽 —</div>
-                   <AnalysisResult profileData={profileData} mode="profile" />
-                </div>
+                </form>
+              ) : (
+                <>
+                  <div className="flex items-center overflow-hidden flex-1">
+                    <MessageSquare className="w-4 h-4 mr-3 flex-shrink-0 opacity-70" />
+                    <span className="truncate">{session.title}</span>
+                  </div>
+                  
+                  {/* Action Buttons */}
+                  <div className={`flex items-center space-x-1 opacity-0 group-hover:opacity-100 transition-opacity ${currentSessionId === session.id ? 'opacity-100' : ''}`}>
+                    <button
+                      onClick={(e) => startEditing(e, session)}
+                      className="p-1 rounded-full hover:bg-white/50 text-gray-400 hover:text-indigo-600"
+                      title="編輯標題"
+                    >
+                      <Pencil className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      onClick={(e) => deleteSession(e, session.id)}
+                      className="p-1 rounded-full hover:bg-white/50 text-gray-400 hover:text-red-500"
+                      title="刪除對話"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </>
               )}
             </div>
-          )}
-
-          {/* STEP 2: Chat */}
-          {activeStep === 2 && (
-            <div className="space-y-6 animate-fadeIn">
-              <div className="bg-white rounded-3xl p-6 md:p-8 border border-gray-100 shadow-xl shadow-gray-200/50">
-                <h2 className="text-2xl font-bold text-gray-900 mb-2">上傳對話內容</h2>
-                <p className="text-gray-500 mb-6">上傳目前的聊天截圖，AI 將結合個人檔案提供回覆建議。</p>
-                
-                <FileUpload 
-                  label="點擊或拖放聊天截圖" 
-                  onFileSelect={handleChatUpload}
-                  onClear={() => {
-                    setChatImage(null);
-                    setChatAdvice(null);
-                    setCompletedSteps(prev => prev.filter(s => s !== 2));
-                  }}
-                />
-
-                {chatImage && (
-                   <button 
-                    onClick={processChat}
-                    disabled={isAnalyzing}
-                    className="w-full mt-6 bg-teal-600 hover:bg-teal-700 text-white font-bold py-3.5 rounded-xl transition-all shadow-lg shadow-teal-200 flex items-center justify-center disabled:opacity-70 disabled:cursor-not-allowed"
-                  >
-                    {isAnalyzing ? (
-                      <><Loader2 className="w-5 h-5 mr-2 animate-spin" /> 教練思考中...</>
-                    ) : (
-                      <>生成回覆建議 <ChevronRight className="w-5 h-5 ml-2" /></>
-                    )}
-                  </button>
-                )}
-              </div>
-
-               {/* Quick reference to profile */}
-               <div className="bg-gray-100 rounded-2xl p-4 cursor-pointer hover:bg-white hover:shadow-md transition-all border border-gray-200" onClick={() => setActiveStep(1)}>
-                  <div className="flex justify-between items-center">
-                    <span className="text-sm font-bold text-gray-500 uppercase tracking-wider">參考：目標對象</span>
-                    <span className="text-xs text-indigo-500 font-medium">查看完整檔案 &rarr;</span>
-                  </div>
-                  <p className="text-gray-700 mt-2 text-sm line-clamp-2 italic">
-                    "{profileData?.summary}"
-                  </p>
-               </div>
-            </div>
-          )}
-
-          {/* STEP 3: Advice */}
-          {activeStep === 3 && (
-            <div className="space-y-6 animate-fadeIn">
-              <AnalysisResult profileData={profileData} chatAdvice={chatAdvice} mode="advice" />
-              
-              <div className="flex justify-center">
-                <button 
-                  onClick={() => {
-                     setChatImage(null);
-                     setChatAdvice(null);
-                     setActiveStep(2);
-                     setCompletedSteps(prev => prev.filter(s => s !== 2));
-                  }}
-                  className="text-gray-500 hover:text-indigo-600 font-medium text-sm flex items-center px-6 py-3 rounded-full hover:bg-white transition-colors"
-                >
-                  <MessageSquare className="w-4 h-4 mr-2" />
-                  分析下一段對話
-                </button>
-              </div>
-            </div>
-          )}
+          ))}
         </div>
-      </main>
+
+        <div className="p-4 border-t border-gray-200">
+           <div className="flex items-center space-x-3 px-2">
+             <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-indigo-500 to-purple-600 flex items-center justify-center text-white text-xs font-bold">
+               AI
+             </div>
+             <div className="text-sm font-medium text-gray-700">RizzCoach</div>
+           </div>
+        </div>
+      </aside>
+
+      {/* MAIN CHAT AREA */}
+      <div className="flex-1 flex h-full relative overflow-hidden">
+        
+        {/* Chat Content Column */}
+        <main className="flex-1 flex flex-col h-full bg-white relative min-w-0">
+          
+          {/* Header */}
+          <header className="h-16 flex items-center justify-between px-4 border-b border-gray-100 flex-shrink-0">
+            <div className="flex items-center min-w-0">
+              <button 
+                onClick={() => setSidebarOpen(!sidebarOpen)}
+                className="p-2 -ml-2 mr-2 rounded-full hover:bg-gray-100 text-gray-600"
+              >
+                <Menu className="w-5 h-5" />
+              </button>
+              <h1 className="text-lg font-medium text-gray-800 flex items-center gap-2 truncate">
+                {currentSession?.title}
+              </h1>
+            </div>
+            
+            <div className="flex items-center space-x-2">
+               {/* Toggle Profile Drawer Button */}
+               {currentSession?.activeProfile && (
+                  <button
+                    onClick={() => setProfileOpen(!profileOpen)}
+                    className={`flex items-center px-3 py-1.5 rounded-full text-xs font-medium border transition-all
+                      ${profileOpen 
+                        ? 'bg-indigo-100 text-indigo-700 border-indigo-200' 
+                        : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'}
+                    `}
+                  >
+                     <User className="w-4 h-4 mr-1.5" />
+                     {profileOpen ? '隱藏檔案' : '查看檔案'}
+                  </button>
+               )}
+            </div>
+          </header>
+
+          {/* Messages List */}
+          <div className="flex-1 overflow-y-auto p-4 md:p-8 space-y-8 scroll-smooth">
+            {currentSession && currentSession.messages.length === 0 && (
+               <div className="h-full flex flex-col items-center justify-center text-center opacity-0 animate-fadeIn" style={{animationFillMode: 'forwards'}}>
+                  <div className="w-16 h-16 bg-gradient-to-tr from-indigo-500 to-purple-600 rounded-2xl flex items-center justify-center mb-6 shadow-xl shadow-indigo-200">
+                     <Sparkles className="w-8 h-8 text-white" />
+                  </div>
+                  <h2 className="text-2xl font-bold text-gray-800 mb-2">你好，我是你的 AI 社交教練。</h2>
+                  <p className="text-gray-500 max-w-md">
+                    首先，請上傳一張對方的 <span className="font-semibold text-indigo-600">個人檔案截圖</span> (如 Tinder/IG)，讓我分析她的性格。
+                  </p>
+                  
+                  {/* Quick Start Hints */}
+                  <div className="mt-8 grid grid-cols-1 md:grid-cols-2 gap-3 w-full max-w-lg">
+                     <div className="p-4 border border-gray-200 rounded-xl bg-gray-50 text-sm text-gray-600 text-left">
+                        <p className="font-semibold mb-1 text-gray-800">1. 分析檔案</p>
+                        上傳個人簡介，分析興趣與性格關鍵字。
+                     </div>
+                     <div className="p-4 border border-gray-200 rounded-xl bg-gray-50 text-sm text-gray-600 text-left">
+                        <p className="font-semibold mb-1 text-gray-800">2. 對話建議</p>
+                        上傳對話截圖，獲取 3 種風格的回覆策略。
+                     </div>
+                  </div>
+               </div>
+            )}
+
+            {currentSession?.messages.map((msg) => (
+              <div 
+                key={msg.id} 
+                className={`flex items-start gap-4 ${msg.role === 'user' ? 'flex-row-reverse' : ''}`}
+              >
+                {/* Avatar */}
+                <div className={`
+                  flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center mt-1
+                  ${msg.role === 'user' ? 'bg-gray-800 text-white' : 'bg-gradient-to-tr from-indigo-500 to-purple-600 text-white'}
+                `}>
+                  {msg.role === 'user' ? <User className="w-5 h-5" /> : <Sparkles className="w-5 h-5" />}
+                </div>
+
+                {/* Content Bubble */}
+                <div className={`flex flex-col max-w-[85%] md:max-w-[75%] ${msg.role === 'user' ? 'items-end' : 'items-start'}`}>
+                  
+                  {/* User Info (Name + Time) */}
+                  <div className={`flex items-center space-x-2 mb-1 text-xs text-gray-400 ${msg.role === 'user' ? 'flex-row-reverse space-x-reverse' : ''}`}>
+                    <span className="font-medium">{msg.role === 'user' ? '你' : 'RizzCoach'}</span>
+                    <span>{new Date(msg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                  </div>
+
+                  {/* Message Body */}
+                  {msg.role === 'user' ? (
+                     // User Bubble
+                     <div className="bg-gray-100 text-gray-800 px-5 py-3 rounded-2xl rounded-tr-sm">
+                        {msg.image && (
+                          <div className="mb-3 rounded-lg overflow-hidden border border-gray-200">
+                            <img src={msg.image} alt="User upload" className="max-w-full max-h-64 object-cover" />
+                          </div>
+                        )}
+                        {msg.content && <p className="whitespace-pre-wrap leading-relaxed">{msg.content}</p>}
+                     </div>
+                  ) : (
+                     // Model Bubble
+                     <div className="w-full">
+                        {msg.type === 'profile_analysis' && msg.profileData && (
+                          <AnalysisResult profileData={msg.profileData} mode="profile" />
+                        )}
+                        
+                        {msg.type === 'chat_advice' && msg.chatAdvice && (
+                          <AnalysisResult chatAdvice={msg.chatAdvice} mode="advice" />
+                        )}
+
+                        {msg.type === 'error' && (
+                          <div className="bg-red-50 text-red-700 px-4 py-3 rounded-xl border border-red-100 inline-block">
+                             {msg.content}
+                          </div>
+                        )}
+                        
+                        {/* Generic text fallback if applicable */}
+                        {msg.type === 'text' && msg.content && (
+                          <div className="text-gray-800 leading-relaxed">
+                            {msg.content}
+                          </div>
+                        )}
+                     </div>
+                  )}
+                </div>
+              </div>
+            ))}
+
+            {isProcessing && (
+              <div className="flex items-start gap-4">
+                 <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-indigo-500 to-purple-600 text-white flex items-center justify-center mt-1 animate-pulse">
+                    <Sparkles className="w-5 h-5" />
+                 </div>
+                 <div className="flex items-center space-x-2 mt-2">
+                   <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{animationDelay: '0ms'}} />
+                   <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{animationDelay: '150ms'}} />
+                   <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{animationDelay: '300ms'}} />
+                 </div>
+              </div>
+            )}
+            <div ref={messagesEndRef} />
+          </div>
+
+          {/* Input Area */}
+          <div className="flex-shrink-0 p-4 max-w-4xl mx-auto w-full">
+             <div className={`
+                bg-gray-100 rounded-3xl p-2 flex flex-col transition-colors focus-within:bg-white focus-within:ring-2 focus-within:ring-indigo-100 border border-transparent focus-within:border-indigo-200
+                ${inputImage ? 'rounded-2xl' : ''}
+             `}>
+                
+                {/* Image Preview */}
+                {inputImage && (
+                  <div className="px-3 pt-3 pb-1 flex">
+                    <div className="relative group">
+                      <img src={inputImage} alt="Upload preview" className="h-20 w-auto rounded-lg border border-gray-300 shadow-sm" />
+                      <button 
+                        onClick={() => {
+                          setInputImage(null);
+                          if (fileInputRef.current) fileInputRef.current.value = '';
+                        }}
+                        className="absolute -top-2 -right-2 bg-gray-800 text-white rounded-full p-1 shadow-md hover:bg-red-500 transition-colors"
+                      >
+                        <X className="w-3 h-3" />
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                <div className="flex items-end gap-2 p-2">
+                   {/* Upload Button */}
+                   <button 
+                      onClick={() => fileInputRef.current?.click()}
+                      className="p-2.5 text-gray-500 hover:text-indigo-600 hover:bg-gray-200 rounded-full transition-all"
+                      title="上傳圖片"
+                      disabled={isProcessing}
+                   >
+                      <ImageIcon className="w-5 h-5" />
+                      <input 
+                        type="file" 
+                        ref={fileInputRef} 
+                        className="hidden" 
+                        accept="image/*"
+                        onChange={handleFileSelect}
+                      />
+                   </button>
+
+                   {/* Text Input */}
+                   <textarea
+                      ref={textareaRef}
+                      value={inputText}
+                      onChange={(e) => setInputText(e.target.value)}
+                      onKeyDown={handleKeyDown}
+                      placeholder={!currentSession?.activeProfile ? "上傳個人檔案截圖並開始..." : "輸入對話狀況，或上傳聊天截圖..."}
+                      className="flex-1 max-h-[200px] bg-transparent border-none focus:ring-0 resize-none py-2.5 px-2 text-gray-800 placeholder-gray-400 leading-6"
+                      rows={1}
+                      disabled={isProcessing}
+                   />
+
+                   {/* Send Button */}
+                   <button 
+                      onClick={handleSendMessage}
+                      disabled={(!inputText.trim() && !inputImage) || isProcessing}
+                      className={`p-2.5 rounded-full transition-all flex items-center justify-center
+                        ${(!inputText.trim() && !inputImage) || isProcessing
+                          ? 'bg-gray-200 text-gray-400 cursor-not-allowed' 
+                          : 'bg-indigo-600 text-white hover:bg-indigo-700 shadow-md shadow-indigo-200'}
+                      `}
+                   >
+                      {isProcessing ? <Loader2 className="w-5 h-5 animate-spin" /> : <Send className="w-5 h-5" />}
+                   </button>
+                </div>
+             </div>
+             <div className="text-center mt-2 text-xs text-gray-400">
+                Gemini 可能會顯示不準確的資訊，請務必再次確認。
+             </div>
+          </div>
+        </main>
+
+        {/* RIGHT PROFILE DRAWER (Resizable) */}
+        <aside 
+          ref={sidebarRef}
+          style={{ width: profileOpen ? sidebarWidth : 0 }}
+          className={`
+             fixed inset-y-0 right-0 z-40 bg-white border-l border-gray-200 shadow-2xl transition-all duration-200 ease-out
+             md:relative md:shadow-none md:z-0
+             ${profileOpen ? '' : 'overflow-hidden border-l-0'}
+          `}
+        >
+           {/* Resize Handle */}
+           <div
+             onMouseDown={startResizing}
+             className={`absolute left-0 top-0 bottom-0 w-1.5 cursor-col-resize hover:bg-indigo-500/20 active:bg-indigo-500 z-50 transition-colors flex items-center justify-center group
+                ${isResizing ? 'bg-indigo-500' : 'bg-transparent'}
+             `}
+           >
+              <div className="h-8 w-1 rounded-full bg-gray-300 group-hover:bg-indigo-400 hidden group-hover:block" />
+           </div>
+
+           <div className="h-full flex flex-col overflow-hidden" style={{ width: sidebarWidth }}>
+              <div className="p-4 border-b border-gray-100 flex items-center justify-between shrink-0">
+                 <h3 className="font-bold text-gray-800 flex items-center">
+                    <User className="w-4 h-4 mr-2 text-indigo-600" />
+                    目前檔案
+                 </h3>
+                 <button 
+                   onClick={() => setProfileOpen(false)}
+                   className="p-1 rounded-full hover:bg-gray-100"
+                 >
+                    <X className="w-5 h-5 text-gray-500" />
+                 </button>
+              </div>
+              
+              <div className="flex-1 overflow-y-auto p-4 bg-gray-50">
+                 {currentSession?.activeProfile ? (
+                    <AnalysisResult profileData={currentSession.activeProfile} mode="profile" />
+                 ) : (
+                    <div className="flex flex-col items-center justify-center h-48 text-gray-400 text-center p-4">
+                       <Info className="w-8 h-8 mb-2 opacity-50" />
+                       <p className="text-sm">尚未建立檔案</p>
+                       <p className="text-xs mt-1">請在對話中上傳個人簡介截圖</p>
+                    </div>
+                 )}
+              </div>
+           </div>
+        </aside>
+
+      </div>
     </div>
   );
 }

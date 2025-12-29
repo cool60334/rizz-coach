@@ -1,5 +1,6 @@
 export interface ProfileAnalysis {
   basicInfo: {
+    name?: string; // Extracted or inferred name
     age?: string;
     occupation?: string;
     constellation?: string;
@@ -8,6 +9,12 @@ export interface ProfileAnalysis {
   interests: string[];
   personalityTraits: string[];
   summary: string;
+  // New: Opening line suggestions based on the profile
+  openingLines: {
+    style: string;
+    content: string;
+    explanation: string;
+  }[];
 }
 
 export interface ReplySuggestion {
@@ -22,10 +29,23 @@ export interface ChatAdvice {
   coachTip: string;
 }
 
-export enum AnalysisStage {
-  IDLE = 'IDLE',
-  ANALYZING_PROFILE = 'ANALYZING_PROFILE',
-  PROFILE_COMPLETE = 'PROFILE_COMPLETE',
-  ANALYZING_CHAT = 'ANALYZING_CHAT',
-  CHAT_COMPLETE = 'CHAT_COMPLETE',
+export type MessageType = 'text' | 'profile_analysis' | 'chat_advice' | 'error';
+
+export interface Message {
+  id: string;
+  role: 'user' | 'model';
+  type: MessageType;
+  content?: string;
+  image?: string; // Base64
+  profileData?: ProfileAnalysis; // If type is profile_analysis
+  chatAdvice?: ChatAdvice; // If type is chat_advice
+  timestamp: number;
+}
+
+export interface Session {
+  id: string;
+  title: string;
+  messages: Message[];
+  activeProfile?: ProfileAnalysis; // The profile context for this session
+  lastUpdated: number;
 }

@@ -35,6 +35,7 @@ const profileSchema: Schema = {
     basicInfo: {
       type: Type.OBJECT,
       properties: {
+        name: { type: Type.STRING, description: "Inferred name of the person from the bio/image. If unknown, leave empty." },
         age: { type: Type.STRING },
         occupation: { type: Type.STRING },
         constellation: { type: Type.STRING },
@@ -50,8 +51,21 @@ const profileSchema: Schema = {
       items: { type: Type.STRING },
     },
     summary: { type: Type.STRING, description: "A brief summary of the target persona" },
+    openingLines: {
+      type: Type.ARRAY,
+      description: "Three opening lines to start a conversation with this specific profile.",
+      items: {
+        type: Type.OBJECT,
+        properties: {
+          style: { type: Type.STRING, description: "e.g., 風格 A (輕鬆幽默)" },
+          content: { type: Type.STRING, description: "The actual opening line text." },
+          explanation: { type: Type.STRING, description: "Why this opener works for this specific profile." },
+        },
+        required: ["style", "content", "explanation"],
+      },
+    },
   },
-  required: ["interests", "personalityTraits", "summary"],
+  required: ["basicInfo", "interests", "personalityTraits", "summary", "openingLines"],
 };
 
 const chatSchema: Schema = {
@@ -75,15 +89,22 @@ const chatSchema: Schema = {
   required: ["situationAnalysis", "suggestions", "coachTip"],
 };
 
-export const analyzeProfileImage = async (base64Image: string): Promise<ProfileAnalysis> => {
+export const analyzeProfileImage = async (base64Image: string, note?: string): Promise<ProfileAnalysis> => {
   if (!apiKey) throw new Error("API Key is missing");
+
+  const prompt = `這是對方的個人資料截圖，請幫我：
+  1. 建立她的基本檔案 (包含姓名推測)。
+  2. 分析她的興趣和性格。
+  3. **重要**：根據她的檔案，提供 3 個適合作為「第一句開場白」的建議。
+     這些開場白必須嚴格遵守 System Instruction 中的 Core Framework (關鍵字+故事/情緒+問句) 和 Constraints (拒絕套路)。
+  ${note ? `\n使用者補充備註: ${note}` : ''}`;
 
   const response = await ai.models.generateContent({
     model: MODEL_NAME,
     contents: {
       parts: [
         { inlineData: { mimeType: 'image/png', data: base64Image } },
-        { text: "這是對方的個人資料截圖，請幫我建立她的基本檔案，分析她的興趣和可能的聊天偏好。" }
+        { text: prompt }
       ]
     },
     config: {
@@ -100,26 +121,34 @@ export const analyzeProfileImage = async (base64Image: string): Promise<ProfileA
 };
 
 export const analyzeChatImage = async (
-  base64Image: string, 
-  profileContext: ProfileAnalysis
+  base64Image: string | null, 
+  profileContext: ProfileAnalysis,
+  note?: string
 ): Promise<ChatAdvice> => {
   if (!apiKey) throw new Error("API Key is missing");
 
   const contextString = JSON.stringify(profileContext);
 
+  const prompt = `這是我們目前的對話進度。
+        
+  目標對象檔案: ${contextString}
+  
+  ${note ? `使用者對於目前狀況的想法/備註(或文字描述的對話內容): ${note}\n` : ''}
+
+  請根據${base64Image ? '圖片中的對話內容' : '使用者提供的備註描述'}，分析對方的意圖，並提供三個不同風格的回覆建議。
+  請嚴格遵循 System Instruction 中的 Output Styles (風格 A, B, C) 提供建議。
+  務必遵循核心架構：關鍵字 + 故事/情緒 + 問句。`;
+
+  const parts: any[] = [{ text: prompt }];
+  
+  if (base64Image) {
+    parts.unshift({ inlineData: { mimeType: 'image/png', data: base64Image } });
+  }
+
   const response = await ai.models.generateContent({
     model: MODEL_NAME,
     contents: {
-      parts: [
-        { inlineData: { mimeType: 'image/png', data: base64Image } },
-        { text: `這是我們目前的對話進度。
-        
-        目標對象檔案: ${contextString}
-        
-        請分析她的所有回覆內容，並提供三個不同風格的回覆建議。
-        請嚴格遵循 System Instruction 中的 Output Styles (風格 A, B, C) 提供建議。
-        務必遵循核心架構：關鍵字 + 故事/情緒 + 問句。` }
-      ]
+      parts: parts
     },
     config: {
       systemInstruction: SYSTEM_INSTRUCTION,
