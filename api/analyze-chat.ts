@@ -2,6 +2,11 @@
 import { GoogleGenAI } from "@google/genai";
 import { MODEL_NAME, SYSTEM_INSTRUCTION, chatSchema } from "./constants.js";
 
+// Allow function to run for up to 60 seconds (Vercel Hobby Limit)
+export const config = {
+    maxDuration: 60,
+};
+
 // Vercel Serverless Function
 export default async function handler(req: Request) {
     if (req.method !== 'POST') {
