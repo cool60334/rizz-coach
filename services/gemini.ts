@@ -1,12 +1,10 @@
+
 import { GoogleGenAI, Type, Schema } from "@google/genai";
 import { ProfileAnalysis, ChatAdvice } from "../types";
 
-const apiKey = process.env.API_KEY || '';
-const ai = new GoogleGenAI({ apiKey });
+// Shared Logic for Local Mode (Duplicated from api/constants.ts to keep local mode self-contained without import issues if not needed)
+const MODEL_NAME = 'gemini-2.0-flash-exp';
 
-const MODEL_NAME = 'gemini-3-flash-preview';
-
-// System Instruction based on the "Role" and "Core Feature Specifications"
 const SYSTEM_INSTRUCTION = `
 你是一位專業社交溝通教練與聊天助手，擅長透過「自然感」與「故事架構」與異性建立深度連結。
 
@@ -89,9 +87,67 @@ const chatSchema: Schema = {
   required: ["situationAnalysis", "suggestions", "coachTip"],
 };
 
-export const analyzeProfileImage = async (base64Image: string, note?: string): Promise<ProfileAnalysis> => {
-  if (!apiKey) throw new Error("API Key is missing");
 
+// Main Service Functions
+
+export const analyzeProfileImage = async (base64Image: string, note?: string): Promise<ProfileAnalysis> => {
+  // Check for Local Dev Mode with Key
+  // We check process.env.GEMINI_API_KEY (injected by Vite config) OR VITE_ env var
+  const localKey = process.env.GEMINI_API_KEY || import.meta.env.VITE_GEMINI_API_KEY; // Note: Ensure your env var is prefixed with VITE_
+  if (localKey && import.meta.env.DEV) {
+    console.log("Using Local Gemini SDK");
+    return localAnalyzeProfile(localKey, base64Image, note);
+  }
+
+  // Production / Proxy Mode
+  console.log("Using Backend API Proxy");
+  const response = await fetch('/api/analyze-profile', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ image: base64Image, note })
+  });
+
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.error || "Failed to analyze profile");
+  }
+
+  return await response.json();
+};
+
+export const analyzeChatImage = async (
+  base64Image: string | null,
+  profileContext: ProfileAnalysis,
+  note?: string
+): Promise<ChatAdvice> => {
+  // Check for Local Dev Mode with Key
+  const localKey = process.env.GEMINI_API_KEY || import.meta.env.VITE_GEMINI_API_KEY;
+  if (localKey && import.meta.env.DEV) {
+    console.log("Using Local Gemini SDK");
+    return localAnalyzeChat(localKey, base64Image, profileContext, note);
+  }
+
+  // Production / Proxy Mode
+  console.log("Using Backend API Proxy");
+  const response = await fetch('/api/analyze-chat', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ image: base64Image, profileContext, note })
+  });
+
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.error || "Failed to analyze chat");
+  }
+
+  return await response.json();
+};
+
+
+// --- Local Implementations (Private) ---
+
+const localAnalyzeProfile = async (apiKey: string, base64Image: string, note?: string): Promise<ProfileAnalysis> => {
+  const ai = new GoogleGenAI({ apiKey });
   const prompt = `這是對方的個人資料截圖，請幫我：
   1. 建立她的基本檔案 (包含姓名推測)。
   2. 分析她的興趣和性格。
@@ -116,17 +172,12 @@ export const analyzeProfileImage = async (base64Image: string, note?: string): P
 
   const text = response.text;
   if (!text) throw new Error("No response from AI");
-  
+
   return JSON.parse(text) as ProfileAnalysis;
-};
+}
 
-export const analyzeChatImage = async (
-  base64Image: string | null, 
-  profileContext: ProfileAnalysis,
-  note?: string
-): Promise<ChatAdvice> => {
-  if (!apiKey) throw new Error("API Key is missing");
-
+const localAnalyzeChat = async (apiKey: string, base64Image: string | null, profileContext: ProfileAnalysis, note?: string): Promise<ChatAdvice> => {
+  const ai = new GoogleGenAI({ apiKey });
   const contextString = JSON.stringify(profileContext);
 
   const prompt = `這是我們目前的對話進度。
@@ -140,7 +191,7 @@ export const analyzeChatImage = async (
   務必遵循核心架構：關鍵字 + 故事/情緒 + 問句。`;
 
   const parts: any[] = [{ text: prompt }];
-  
+
   if (base64Image) {
     parts.unshift({ inlineData: { mimeType: 'image/png', data: base64Image } });
   }
@@ -161,4 +212,4 @@ export const analyzeChatImage = async (
   if (!text) throw new Error("No response from AI");
 
   return JSON.parse(text) as ChatAdvice;
-};
+}
