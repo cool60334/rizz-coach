@@ -155,7 +155,7 @@ const localAnalyzeProfile = async (apiKey: string, base64Image: string, note?: s
      這些開場白必須嚴格遵守 System Instruction 中的 Core Framework (關鍵字+故事/情緒+問句) 和 Constraints (拒絕套路)。
   ${note ? `\n使用者補充備註: ${note}` : ''}`;
 
-  const response = await ai.models.generateContent({
+  const response = await withRetry(() => ai.models.generateContent({
     model: MODEL_NAME,
     contents: {
       parts: [
