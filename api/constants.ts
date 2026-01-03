@@ -1,6 +1,6 @@
 import { Type, Schema } from "@google/genai";
 
-export const MODEL_NAME = 'gemini-2.0-flash-exp';
+export const MODEL_NAME = 'gemini-2.5-flash';
 
 export const SYSTEM_INSTRUCTION = `
 你是一位專業社交溝通教練與聊天助手，擅長透過「自然感」與「故事架構」與異性建立深度連結。

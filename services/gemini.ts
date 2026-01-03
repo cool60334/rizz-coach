@@ -3,7 +3,7 @@ import { GoogleGenAI, Type, Schema } from "@google/genai";
 import { ProfileAnalysis, ChatAdvice } from "../types";
 
 // Shared Logic for Local Mode (Duplicated from api/constants.ts to keep local mode self-contained without import issues if not needed)
-const MODEL_NAME = 'gemini-2.0-flash-exp';
+const MODEL_NAME = 'gemini-2.5-flash';
 
 const SYSTEM_INSTRUCTION = `
 你是一位專業社交溝通教練與聊天助手，擅長透過「自然感」與「故事架構」與異性建立深度連結。
@@ -155,7 +155,7 @@ const localAnalyzeProfile = async (apiKey: string, base64Image: string, note?: s
      這些開場白必須嚴格遵守 System Instruction 中的 Core Framework (關鍵字+故事/情緒+問句) 和 Constraints (拒絕套路)。
   ${note ? `\n使用者補充備註: ${note}` : ''}`;
 
-  const response = await withRetry(() => ai.models.generateContent({
+  const response = await ai.models.generateContent({
     model: MODEL_NAME,
     contents: {
       parts: [
